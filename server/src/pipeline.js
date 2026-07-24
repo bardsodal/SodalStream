@@ -39,7 +39,7 @@ async function probePass() {
 
 async function thumbnailPass() {
   const pending = db
-    .prepare('SELECT id, source_path, duration_s FROM episodes WHERE thumb_path IS NULL AND missing = 0')
+    .prepare('SELECT id, source_path, playback_path, duration_s FROM episodes WHERE thumb_path IS NULL AND missing = 0')
     .all();
   status.thumbs = { done: 0, total: pending.length };
   for (const ep of pending) {

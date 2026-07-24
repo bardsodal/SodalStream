@@ -4,6 +4,7 @@ import path from 'node:path';
 import ffmpegStatic from 'ffmpeg-static';
 import db from './db.js';
 import config from './config.js';
+import { probe } from './prober.js';
 
 const ffmpegPath = process.env.FFMPEG_PATH || ffmpegStatic;
 
@@ -11,8 +12,10 @@ const ffmpegPath = process.env.FFMPEG_PATH || ffmpegStatic;
 export const convertStatus = { active: null, queued: 0 };
 
 // Leftover temp files from a crashed conversion are never valid
-for (const f of fs.readdirSync(config.mediaCacheDir)) {
-  if (f.endsWith('.tmp.mp4')) fs.rmSync(path.join(config.mediaCacheDir, f), { force: true });
+for (const dir of [config.mediaCacheDir, config.libraryDir]) {
+  for (const f of fs.readdirSync(dir)) {
+    if (f.endsWith('.tmp.mp4')) fs.rmSync(path.join(dir, f), { force: true });
+  }
 }
 
 let hwEncoder; // undefined = not probed yet, null = software only
@@ -31,10 +34,7 @@ async function detectHwEncoder() {
 
 function buildArgs(ep, encoder, out) {
   const args = ['-y', '-i', ep.source_path, '-map', '0:v:0', '-map', '0:a:0?'];
-  if (ep.compat === 'no_audio') {
-    // Video already browser-playable: keep it, only fix the audio
-    args.push('-c:v', 'copy');
-  } else if (encoder) {
+  if (encoder) {
     args.push(
       '-vf', 'yadif=deint=interlaced',
       '-c:v', encoder, '-preset', 'p5', '-cq', '23',
@@ -83,17 +83,81 @@ const setStatus = db.prepare(
 const setReady = db.prepare(
   "UPDATE episodes SET convert_status = 'ready', playback_path = ?, convert_error = NULL WHERE id = ?"
 );
+const setSourceDeleted = db.prepare('UPDATE episodes SET source_deleted = 1 WHERE id = ?');
+
+// Strip characters Windows forbids in file names; never end in dot/space
+function sanitizeName(s) {
+  return (
+    s.replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '') ||
+    'Untitled'
+  );
+}
+
+// Permanent home of a converted episode: <library>/<Series>/<Episode title>.mp4
+function libraryTarget(ep) {
+  const dir = path.join(config.libraryDir, sanitizeName(ep.series_title));
+  fs.mkdirSync(dir, { recursive: true });
+  const base = sanitizeName(ep.title);
+  const plain = path.join(dir, `${base}.mp4`);
+  return fs.existsSync(plain) ? path.join(dir, `${base} (${ep.id}).mp4`) : plain;
+}
+
+// The converted file becomes the only copy, so sanity-check it before the
+// original is deleted: it must probe cleanly and match the source duration.
+async function verifyOutput(tmp, ep) {
+  const info = await probe(tmp);
+  if (!info.durationS || info.durationS <= 0) throw new Error('converted file has no duration');
+  if (ep.duration_s) {
+    const tolerance = Math.max(5, ep.duration_s * 0.02);
+    if (Math.abs(info.durationS - ep.duration_s) > tolerance) {
+      throw new Error(
+        `converted duration ${info.durationS.toFixed(1)}s differs from source ${ep.duration_s.toFixed(1)}s`
+      );
+    }
+  }
+}
+
+// Remove now-empty folders the ingested file leaves behind, up to mediaRoot
+function pruneEmptyDirs(filePath) {
+  const stop = path.resolve(config.mediaRoot);
+  let dir = path.resolve(path.dirname(filePath));
+  try {
+    while (dir !== stop && dir.startsWith(stop + path.sep) && fs.readdirSync(dir).length === 0) {
+      fs.rmdirSync(dir);
+      dir = path.dirname(dir);
+    }
+  } catch {
+    // best effort — a straggler folder is harmless
+  }
+}
+
+function deleteOriginal(ep) {
+  try {
+    fs.rmSync(ep.source_path, { force: true });
+    setSourceDeleted.run(ep.id);
+    pruneEmptyDirs(ep.source_path);
+  } catch (err) {
+    // Conversion is still valid; the leftover original just stays in the
+    // ingest folder until deleted manually.
+    console.error(`could not delete original ${ep.source_path}: ${err.message}`);
+  }
+}
 
 const queue = [];
 let draining = false;
 
 async function convertOne(id) {
-  const ep = db.prepare('SELECT * FROM episodes WHERE id = ? AND missing = 0').get(id);
+  const ep = db
+    .prepare(
+      `SELECT e.*, s.title AS series_title
+       FROM episodes e JOIN series s ON s.id = e.series_id
+       WHERE e.id = ? AND e.missing = 0 AND e.source_deleted = 0`
+    )
+    .get(id);
   if (!ep || ep.convert_status === 'ready') return;
 
-  const tmp = path.join(config.mediaCacheDir, `${id}.tmp.mp4`);
-  const out = path.join(config.mediaCacheDir, `${id}.mp4`);
-  let encoder = ep.compat === 'no_video' ? await detectHwEncoder() : null;
+  const tmp = path.join(config.libraryDir, `${id}.tmp.mp4`);
+  let encoder = await detectHwEncoder();
 
   convertStatus.active = { episodeId: ep.id, title: ep.title, progress: 0 };
   setStatus.run('converting', null, id);
@@ -107,8 +171,11 @@ async function convertOne(id) {
       convertStatus.active.progress = 0;
       await runFfmpeg(ep, null, tmp);
     }
+    await verifyOutput(tmp, ep);
+    const out = libraryTarget(ep);
     fs.renameSync(tmp, out);
     setReady.run(out, id);
+    deleteOriginal(ep);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
     setStatus.run('failed', String(err.message).slice(0, 500), id);
@@ -128,10 +195,13 @@ async function drain() {
 }
 
 export function enqueueConversions() {
+  // Every probed file gets converted (smaller + guaranteed browser-playable),
+  // regardless of source codec; originals are deleted after verification.
   const rows = db
     .prepare(`
       SELECT id FROM episodes
-      WHERE missing = 0 AND compat IN ('no_audio', 'no_video') AND convert_status != 'ready'
+      WHERE missing = 0 AND source_deleted = 0 AND compat != 'unknown'
+        AND convert_status != 'ready'
       ORDER BY series_id, season, episode
     `)
     .all();

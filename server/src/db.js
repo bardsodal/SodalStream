@@ -47,6 +47,11 @@ const MIGRATIONS = [
   ALTER TABLE episodes ADD COLUMN convert_status TEXT NOT NULL DEFAULT 'none';
   ALTER TABLE episodes ADD COLUMN convert_error TEXT;
   `,
+  // Ingest model: original was deleted from MEDIA_ROOT after a verified
+  // conversion; the episode lives on through playback_path only.
+  `
+  ALTER TABLE episodes ADD COLUMN source_deleted INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 const applied = db.pragma('user_version', { simple: true });

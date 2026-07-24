@@ -1,20 +1,24 @@
 # SodalStream
 
-Self-hosted streaming server for a local video library: scans a folder of series,
-probes/transcodes episodes for browser playback, and serves a React UI with watch
-progress and continue-watching. Personal use, runs on localhost only.
+Self-hosted streaming server for a local video library: ingests series dropped into
+MEDIA_ROOT (scan is manual, via the UI button), transcodes every episode into
+LIBRARY_DIR and then deletes the original, and serves a React UI with watch progress
+and continue-watching. Personal use, runs on localhost only.
 
 ## Layout
 
 ```
 server/         Express API + media pipeline (Node, ES modules)
-  src/index.js        App entry: routes, static serving of web/dist, scan on boot
-  src/config.js       .env loading (MEDIA_ROOT, CACHE_DIR, PORT) — exits if MEDIA_ROOT invalid
+  src/index.js        App entry: routes, static serving of web/dist (no scan on boot)
+  src/config.js       .env loading (MEDIA_ROOT, LIBRARY_DIR, CACHE_DIR, PORT) — exits if MEDIA_ROOT invalid
   src/pipeline.js     Scan orchestration: scanner -> prober -> converter -> thumbnails
   src/db.js, queries.js   better-sqlite3 database in cache/sodalstream.db
   src/routes/         library.js, playback.js, progress.js
 web/            React 18 + Vite SPA (pages: Home, SeriesDetail, Player, History)
-cache/          GENERATED (db, thumbs, transcoded media) — gitignored, never edit
+cache/          GENERATED (db, thumbs) — gitignored, disposable, never edit
+LIBRARY_DIR     (Videos\SodalStreamLibrary) converted episodes — the ONLY copy
+                of ingested media, NOT disposable. MEDIA_ROOT is just the ingest
+                inbox; originals there are deleted after verified conversion.
 .env            Local config, gitignored — .env.example documents the keys
 status.md       Project snapshot — READ THIS FIRST each session
 todo.md         Open work items

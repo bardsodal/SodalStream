@@ -17,3 +17,5 @@
 ## Done (recent)
 
 - [x] 2026-07-24 AgenticOS project setup (CLAUDE.md, status.md, todo.md, .claude/settings.local.json)
+- [x] 2026-07-24 Ingest model: MEDIA_ROOT → SodalStreamInput, convert everything into
+      SodalStreamLibrary, delete verified originals, manual scan only

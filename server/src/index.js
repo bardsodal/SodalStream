@@ -5,7 +5,6 @@ import config from './config.js';
 import libraryRoutes from './routes/library.js';
 import playbackRoutes from './routes/playback.js';
 import progressRoutes from './routes/progress.js';
-import { runScan } from './pipeline.js';
 
 const app = express();
 
@@ -26,8 +25,10 @@ if (fs.existsSync(path.join(dist, 'index.html'))) {
   });
 }
 
+// No scan on boot — the library is only scanned via the UI's "Scan library"
+// button (POST /api/scan).
 app.listen(config.port, '127.0.0.1', () => {
   console.log(`SodalStream server on http://localhost:${config.port}`);
-  console.log(`Media root: ${config.mediaRoot}`);
-  runScan();
+  console.log(`Ingest folder: ${config.mediaRoot}`);
+  console.log(`Library: ${config.libraryDir}`);
 });

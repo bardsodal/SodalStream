@@ -19,10 +19,16 @@ const cacheDir = process.env.CACHE_DIR || path.join(ROOT, 'cache');
 fs.mkdirSync(path.join(cacheDir, 'thumbs'), { recursive: true });
 fs.mkdirSync(path.join(cacheDir, 'media'), { recursive: true });
 
+// Permanent home of converted episodes. NOT disposable: once an original is
+// ingested and deleted from MEDIA_ROOT, the file here is the only copy.
+const libraryDir = process.env.LIBRARY_DIR || path.join(ROOT, 'library');
+fs.mkdirSync(libraryDir, { recursive: true });
+
 export default {
   root: ROOT,
   mediaRoot: path.resolve(mediaRoot),
   cacheDir,
+  libraryDir: path.resolve(libraryDir),
   thumbsDir: path.join(cacheDir, 'thumbs'),
   mediaCacheDir: path.join(cacheDir, 'media'),
   dbPath: path.join(cacheDir, 'sodalstream.db'),
